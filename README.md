@@ -1,4 +1,27 @@
-## Load Testing tool 
+### **gau_rs** is a load testing tool written in Rust the name is inspired by "**GAU-8 Avenger**" autocannon mounted on the **Fairchild Republic A-10** ***Thunderbolt II***. 
+---
+
+### Supports the following features:
+
+- **GET** and **POST** requests
+- Configurable number of requests
+- Configurable number of concurrent requests
+- Configurable tasks
+
+```rust
+gau_rs [OPTIONS] --url <URL> --method <METHOD>
+```
+```rust
+Options:
+  -u, --url <URL>
+  -m, --method <METHOD>
+  -d, --data <DATA>
+  -n, --number-of-requests <NUMBER_OF_REQUESTS>  [default: 1]
+  -c, --concurent-requests <CONCURENT_REQUESTS>  [default: 1]
+  -t, --tasks <TASKS>                            [default: 1]
+  -h, --help                                     Print help
+  -V, --version                                  Print version
+  ```
 
 
 

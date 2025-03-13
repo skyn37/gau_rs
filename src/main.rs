@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::sync::Arc;
 
 use clap::Parser;
-use reqwest::{self, Client};
+use reqwest::{self, Client, Response};
 use tokio::task::JoinSet;
 use tokio::sync::Semaphore;
 use tokio::runtime::Builder;
@@ -16,15 +16,19 @@ struct Args {
     #[arg(short, long)]
     method: String,
     #[arg(short, long)]
+    headers: Option<String>,
+    #[arg(short, long)]
     data: Option<String>,
-    #[arg(short, long, default_value = "1")]
-    number_of_requests: i32,
     #[arg(short, long, default_value = "1")]
     concurent_requests: i32,
     #[arg(short, long, default_value = "1")]
-    tasks: i32,
+    tasks: i8,
+    #[arg(short, long, default_value = "60",)]
+    run_time: i32,
     #[arg(short, long)]
-    run_time: Option<i32>,
+    sleep: Option<i128>,
+    #[arg(short = 'l', long)]
+    rate_limit: Option<i32>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,27 +44,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-    let Args { url, method, data, number_of_requests, concurent_requests, .. } = args;
+    let Args { url, method, data, concurent_requests, sleep, run_time, rate_limit, .. } = args;
     let sem = Arc::new(Semaphore::new(concurent_requests as usize));
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(60)).build()?;
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(60))
+        // .pool_max_idle_per_host(0)
+        .tcp_nodelay(true)
+        .build()?;
+    let deadline = Instant::now() + Duration::from_secs(run_time as u64);
     let mut set = JoinSet::new();
-    for _ in 0..number_of_requests {
+    let mut rate_limiter = rate_limit.map(|r| tokio::time::interval(Duration::from_secs_f64(1.0 / r as f64)));
+    loop {
+        if Instant::now() > deadline {
+            break;
+        }
+        
+        if let Some(ref mut interval) = rate_limiter {
+            interval.tick().await;
+        }
         let url = url.clone();
         let method = method.clone();
         let data = data.clone();
         let client = client.clone();
+        let sleep = sleep.clone();
         let sem = sem.clone();
         set.spawn(async move {
+            if let Some(sleep) = sleep {
+                tokio::time::sleep(Duration::from_millis(sleep as u64)).await;
+            }
             let _permit = sem.acquire().await;
             if let Err(_) = _permit {
                 println!("Error: Semaphore acquire failed");
             }
             let res = request(&client,&url, &method, data).await;
-            drop(_permit);
             match res {
-                Ok(_) => {},
-                Err(e) => println!("Error: {:?}", e),
+                Ok(res) => {
+                    println!("Status: {}", res.status());
+                },
+                Err(e) => {
+                    eprintln!("Error: {:?}", e);
+                }
             }
+            drop(_permit);
         });
     }
     while let Some(res) = set.join_next().await {
@@ -71,12 +95,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn request(client: &Client,url: &str, method: &str, data: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn request(client: &Client,url: &str, method: &str, data: Option<String>) -> Result<Response, reqwest::Error> {
     let resp = match method {
         "GET" => {
-            if let Some(_) = data {
-                return Err(Box::<dyn std::error::Error>::from("GET method does not support data"));
-            }
             let res = client.get(url).send().await?;
             res
         },
@@ -88,8 +109,8 @@ async fn request(client: &Client,url: &str, method: &str, data: Option<String>) 
             let res = builder.send().await?;
             res
         },
-        _ => return Err(Box::<dyn std::error::Error>::from("Invalid HTTP method")),
+        _ => panic!("Invalid HTTP method"),
     };
-    let _ = resp.text().await?;
-    Ok(())
+
+    Ok(resp)
 }

@@ -30,6 +30,8 @@ Options:
 0%  |  Add random delays & ramp-up |
 0%  |  Scripted multi-server launch |
 0%  |  Headers, cookies, auth |
+0%  |  UNIX domain socket support |
+0%  |  Pipelining |
 
 
 

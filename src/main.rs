@@ -11,6 +11,7 @@ use reqwest::{self, Client, Response, StatusCode};
 use tokio::runtime::Builder;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
+use tokio::time;
 
 mod utils;
 
@@ -103,9 +104,11 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let counter_clone = request_per_second_counter.clone();
     let history_clone = request_per_second_mutex.clone();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        let start = time::Instant::now() + time::Duration::from_secs(1);
+        let mut ticker = time::interval_at(start, Duration::from_secs(1));
+
         loop {
-            ticker.tick().await;
+            ticker.tick().await; // Now it ticks only after 1 second
             let mut count = counter_clone.lock().await;
             let mut history = history_clone.lock().await;
             history.push(*count); // Store count

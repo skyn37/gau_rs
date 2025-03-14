@@ -1,4 +1,5 @@
 use rlimit::{getrlimit, setrlimit, Resource};
+use utils::logging;
 use std::process::exit;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -6,7 +7,7 @@ use std::time::{Duration, Instant};
 use clap::Parser;
 use reqwest::{self, Client, Response};
 use tokio::runtime::Builder;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 
 mod utils;
@@ -32,11 +33,10 @@ struct Args {
     #[arg(short, long)]
     sleep: Option<u128>,
     #[arg(short = 'l', long)]
-    rate_limit: Option<u32>,
+    rate_limit: Option<f64>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    utils::logging::log();
     let args = Args::parse();
     let number_of_threads = std::cmp::max(1, args.tasks as usize);
     let runtime = Builder::new_multi_thread()
@@ -60,6 +60,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         ..
     } = args;
     let sem = Arc::new(Semaphore::new(concurent_requests as usize));
+    let latency_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         //.pool_max_idle_per_host(concurent_requests as usize)
@@ -70,8 +71,8 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         if soft < concurent_requests as u64 {
             setrlimit(
                 Resource::NOFILE,
-                soft + (concurent_requests as u64) * 2,
-                soft + (concurent_requests as u64) * 2,
+                soft + (concurent_requests as u64) * utils::constants::MULTIPLIER,
+                soft + (concurent_requests as u64) * utils::constants::MULTIPLIER,
             )?;
         }
     }
@@ -80,6 +81,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let mut set = JoinSet::new();
     let mut rate_limiter =
         rate_limit.map(|r| tokio::time::interval(Duration::from_secs_f64(1.0 / r as f64)));
+    if let Some(ref mut interval) = rate_limiter {
+        interval.tick().await;
+    }
     loop {
         if Instant::now() > deadline {
             break;
@@ -94,6 +98,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         let client = client.clone();
         let sleep = sleep.clone();
         let sem = sem.clone();
+        let latency_mutex = latency_mutex.clone();
 
         if set.len() >= concurent_requests as usize {
             if let Some(res) = set.join_next().await {
@@ -111,8 +116,15 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             if let Err(_) = _permit {
                 println!("Error: Semaphore acquire failed");
             }
+            let start = Instant::now();
             let res = request(&client, &url, &method, data).await;
+            let elapsed = start.elapsed().as_secs_f64();
             drop(_permit);
+            {
+                let mut latency = latency_mutex.lock().await;
+                latency.push(elapsed);
+            };
+
             match res {
                 Ok(res) => {
                     //dbg!(res);
@@ -129,6 +141,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Task failed: {:?}", e);
         }
     }
+    let latency = latency_mutex.lock().await;
+    let latency_vec = latency.clone();
+    let latency_histogram = logging::Histogram::from_data(latency_vec);
+    dbg!(latency_histogram);
     Ok(())
 }
 

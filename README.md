@@ -25,7 +25,7 @@ Options:
 
 | Status | Feature |
 | --- | -------------------------- |
-0%	|  Add tracking & reporting  |
+20%	|  Add tracking & reporting  |
 0%	|  Load from JSON |
 0%  |  Add random delays & ramp-up |
 0%  |  Scripted multi-server launch |

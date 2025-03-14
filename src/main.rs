@@ -1,11 +1,13 @@
 use rlimit::{getrlimit, setrlimit, Resource};
-use utils::logging;
-use std::process::exit;
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::time::SystemTime;
+
+use utils::logging;
 
 use clap::Parser;
-use reqwest::{self, Client, Response};
+use reqwest::{self, Client, Response, StatusCode};
 use tokio::runtime::Builder;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
@@ -18,6 +20,8 @@ mod utils;
 struct Args {
     #[arg(short, long)]
     url: String,
+    #[arg(short = 'v', long, default_value = "DEFAULT")]
+    title: String,
     #[arg(short, long)]
     method: String,
     #[arg(short = 'g', long)]
@@ -57,10 +61,21 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         sleep,
         run_time,
         rate_limit,
+        title,
         ..
     } = args;
     let sem = Arc::new(Semaphore::new(concurent_requests as usize));
     let latency_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    let request_per_second_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    let request_per_second_counter = Arc::new(Mutex::new(0.0));
+    let req_byte_size_arr_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
+    
+    let start_time = SystemTime::now();
+    
+    let request_counter_mutex = Arc::new(Mutex::new(0));
+    let errors_mutex = Arc::new(Mutex::new(0));
+    let non2xx_mutex = Arc::new(Mutex::new(0));
+    
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         //.pool_max_idle_per_host(concurent_requests as usize)
@@ -84,6 +99,21 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref mut interval) = rate_limiter {
         interval.tick().await;
     }
+
+    let counter_clone = request_per_second_counter.clone();
+    let history_clone = request_per_second_mutex.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            let mut count = counter_clone.lock().await;
+            let mut history = history_clone.lock().await;
+            history.push(*count); // Store count
+            println!("Requests this second: {}", *count);
+            *count = 0.0; // Reset counter for the next second
+        }
+    });
+
     loop {
         if Instant::now() > deadline {
             break;
@@ -97,8 +127,13 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         let data = data.clone();
         let client = client.clone();
         let sleep = sleep.clone();
+        let req_byte_size_arr_mutex = req_byte_size_arr_mutex.clone();
         let sem = sem.clone();
         let latency_mutex = latency_mutex.clone();
+        let request_per_second_counter = request_per_second_counter.clone();
+        let request_counter = request_counter_mutex.clone();
+        let errors = errors_mutex.clone();
+        let non2xx = non2xx_mutex.clone();
 
         if set.len() >= concurent_requests as usize {
             if let Some(res) = set.join_next().await {
@@ -116,6 +151,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             if let Err(_) = _permit {
                 println!("Error: Semaphore acquire failed");
             }
+            {
+                let mut counter = request_per_second_counter.lock().await;
+                *counter += 1.0; // ✅ Increment request counter
+            }
             let start = Instant::now();
             let res = request(&client, &url, &method, data).await;
             let elapsed = start.elapsed().as_secs_f64();
@@ -127,10 +166,21 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
             match res {
                 Ok(res) => {
-                    //dbg!(res);
-                    //println!("Status: {}", res.status());
+                    let status_code = res.status();
+                    let b = res.bytes().await.unwrap();
+                    let mut req_byte_size_arr = req_byte_size_arr_mutex.lock().await;
+                    req_byte_size_arr.push(b.len() as f64);
+                    let mut counter = request_counter.lock().await;
+                    *counter += 1;
+                    if status_code.as_u16() < 200 || status_code.as_u16() >= 300 {
+                        let mut non2xx = non2xx.lock().await;
+                        *non2xx += 1;
+                    }
+      
                 }
                 Err(e) => {
+                    let mut errors = errors.lock().await;
+                    *errors += 1;
                     eprintln!("Error: {:?}", e);
                 }
             }
@@ -144,7 +194,34 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let latency = latency_mutex.lock().await;
     let latency_vec = latency.clone();
     let latency_histogram = logging::Histogram::from_data(latency_vec);
-    dbg!(latency_histogram);
+    // dbg!(latency_histogram);
+
+    let history = request_per_second_mutex.lock().await;
+    let history_vec = history.clone();
+    let history_histogram = logging::Histogram::from_data(history_vec);
+    // dbg!(history_histogram);
+
+    let req_byte_size = req_byte_size_arr_mutex.lock().await;
+    let req_byte_size_vec = req_byte_size.clone();
+    let req_byte_size_histogram = logging::Histogram::from_data(req_byte_size_vec);
+    // dbg!(req_byte_size_histogram);
+    
+    let results = logging::Results::new(
+        title,
+        url,
+        history_histogram,
+        concurent_requests,
+        latency_histogram,
+        req_byte_size_histogram,
+        run_time,
+        *errors_mutex.lock().await,
+        0,
+        start_time,
+        SystemTime::now(),
+        concurent_requests,
+        *non2xx_mutex.lock().await,
+    );
+    dbg!(results);
     Ok(())
 }
 

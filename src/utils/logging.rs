@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+#[derive(Debug)]
 pub struct Results {
     title: String,                           // Title of the run TODO.
     url: String,                             // URL that was targeted.
-    socket_path: Option<String>, // UNIX Domain Socket or Windows Named Pipe that was targeted. TODO
+    //socket_path: Option<String>, // UNIX Domain Socket or Windows Named Pipe that was targeted. TODO
     requests_per_second: Histogram, // Number of requests that were sent per second.
     requests: u32,               // Number of requests that were sent.
     latency: Histogram,          // Response latency.
@@ -12,14 +13,48 @@ pub struct Results {
     duration: u32,               // Amount of time the test took, in seconds.
     errors: u32,                 // Number of connection errors (including timeouts) that occurred.
     timeouts: u32,               // Number of connection timeouts that occurred.
-    mismatches: u32,             // Number of requests with a mismatched body. TODO
+    //mismatches: u32,             // Number of requests with a mismatched body. TODO
     start: SystemTime,           // When the test started UNIX.
     finish: SystemTime,          // When the test ended UNIX.
     connections: u32,            // Amount of connections used.
-    pipelining: u32,             // Number of pipelined requests used per connection.TODO
+    //pipelining: u32,             // Number of pipelined requests used per connection.TODO
     non2xx: u32,                 // Number of non-2xx response status codes received.
-    resets: u32, // How many times the requests pipeline was reset due to setupRequest returning a falsey value.TODO see pipeline.
-    status_code_stats: HashMap<String, u16>, // Requests counter per status code.
+    //resets: u32, // How many times the requests pipeline was reset due to setupRequest returning a falsey value.TODO see pipeline.
+    //status_code_stats: HashMap<String, u16>, // Requests counter per status code.
+}
+
+impl Results {
+    pub fn new(
+        title: String,
+        url: String,
+        requests_per_second: Histogram,
+        requests: u32,
+        latency: Histogram,
+        throughput: Histogram,
+        duration: u32,
+        errors: u32,
+        timeouts: u32,
+        start: SystemTime,
+        finish: SystemTime,
+        connections: u32,
+        non2xx: u32,
+    ) -> Self {
+        Results {
+            title,
+            url,
+            requests_per_second,
+            requests,
+            latency,
+            throughput,
+            duration,
+            errors,
+            timeouts,
+            start,
+            finish,
+            connections,
+            non2xx,
+        }
+    }
 }
 
 #[derive(Debug)]

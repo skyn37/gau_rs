@@ -45,10 +45,13 @@ struct Args {
         long = "redirect-policy",
         value_parser = parse_redirect_policy,
         default_value = "Default",
-        help = "Sets the redirect policy. Possible values:\n\
-                - None: Do not follow redirects.\n\
-                - Default: Follow up to 10 redirects (default behavior).\n\
-                - Limit=<N>: Follow up to N redirects (e.g., Limit=5)."
+        help = r#"Sets the redirect policy. This controls the reqwest redirect behavior. 
+        Currently, custom policies are not supported in this tool.
+        
+        Options:
+          - None:       Do not follow redirects.
+          - Default:    Follow up to 10 redirects (default behavior).
+          - Limit=<N>:  Follow up to N redirects (e.g., Limit=5)."#
     )]
     redirect_policy: RedirectPolicy,
 }

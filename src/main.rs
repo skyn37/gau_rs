@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
@@ -6,7 +7,8 @@ use utils::logging;
 
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use reqwest::{self, Client, Response};
+use reqwest::redirect::Policy;
+use reqwest::{self, Client, Error, Response};
 use rlimit::{getrlimit, setrlimit, Resource};
 use serde_json::Value;
 use tokio::runtime::Builder;
@@ -17,8 +19,7 @@ use tokio::time;
 mod utils;
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-
+#[command(name = "gau_rs", version = "0.1", about = "A stress test tool")]
 struct Args {
     #[arg(short, long)]
     url: String,
@@ -26,20 +27,61 @@ struct Args {
     title: String,
     #[arg(short, long)]
     method: String,
-    #[arg(short = 'G', long)]
+    #[arg(short = 'G', long, help="This should be a JSON string")]
     headers: Option<String>,
-    #[arg(short, long)]
+    #[arg(short, long, help="POST data")]
     data: Option<String>,
-    #[arg(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "1", help = "Number of concurrent requests")]
     concurent_requests: u32,
-    #[arg(short, long, default_value = "1")]
+    #[arg(short, long, default_value = "1", help = "Number of tokio tasks to spawn")]
     tasks: u8,
-    #[arg(short, long, default_value = "60")]
+    #[arg(short, long, default_value = "60", help = "The duration of the test in seconds")]
     run_time: u32,
-    #[arg(short, long)]
+    #[arg(short, long, help = "Sleep time in milliseconds between requests")]
     sleep: Option<u128>,
-    #[arg(short = 'l', long)]
+    #[arg(short = 'l', long, help = "Rate limit requests per second")]
     rate_limit: Option<f64>,
+    #[arg(
+        long = "redirect-policy",
+        value_parser = parse_redirect_policy,
+        default_value = "Default",
+        help = "Sets the redirect policy. Possible values:\n\
+                - None: Do not follow redirects.\n\
+                - Default: Follow up to 10 redirects (default behavior).\n\
+                - Limit=<N>: Follow up to N redirects (e.g., Limit=5)."
+    )]
+    redirect_policy: RedirectPolicy,
+}
+
+#[derive(Debug, Clone)]
+enum RedirectPolicy {
+    None,
+    Default,
+    Limit(u32),
+}
+
+impl FromStr for RedirectPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "none" => Ok(RedirectPolicy::None),
+            "default" => Ok(RedirectPolicy::Default),
+            _ if s.starts_with("limit=") => s[6..]
+                .parse::<u32>()
+                .map(RedirectPolicy::Limit)
+                .map_err(|_| "Invalid number for Limit (expected Limit=<number>)".to_string()),
+            _ => Err(format!(
+                "Invalid value '{}'. Expected: None, Default, Limit=<number>",
+                s
+            )),
+        }
+    }
+}
+
+// Custom parser function for clap
+fn parse_redirect_policy(s: &str) -> Result<RedirectPolicy, String> {
+    RedirectPolicy::from_str(s)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -75,6 +117,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         rate_limit,
         title,
         headers,
+        redirect_policy,
         ..
     } = args;
     let sem = Arc::new(Semaphore::new(concurent_requests as usize));
@@ -89,11 +132,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let errors_mutex = Arc::new(Mutex::new(0));
     let non2xx_mutex = Arc::new(Mutex::new(0));
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        //.pool_max_idle_per_host(concurent_requests as usize)
-        .tcp_nodelay(true)
-        .build()?;
+    let client = construct_gau_client(redirect_policy, concurent_requests)?;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     let deadline = Instant::now() + Duration::from_secs(run_time as u64);
@@ -278,4 +317,22 @@ fn parse_from_json_string_headers(headers: Option<String>) -> HeaderMap {
         }
     }
     header_map
+}
+
+fn construct_gau_client(
+    redirect_policy: RedirectPolicy,
+    _: u32,
+) -> Result<Client, Error> {
+    let mut client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        //.pool_max_idle_per_host(concurent_requests as usize)
+        .tcp_nodelay(true);
+
+    client = match redirect_policy {
+        RedirectPolicy::None => client.redirect(Policy::none()),
+        RedirectPolicy::Default => client.redirect(Policy::default()),
+        RedirectPolicy::Limit(limit) => client.redirect(Policy::limited(limit as usize)),
+    };
+
+    client.build()
 }

@@ -1,13 +1,14 @@
-use rlimit::{getrlimit, setrlimit, Resource};
-
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 use utils::logging;
 
 use clap::Parser;
-use reqwest::{self, Client, Response, StatusCode};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::{self, Client, Response};
+use rlimit::{getrlimit, setrlimit, Resource};
+use serde_json::Value;
 use tokio::runtime::Builder;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
@@ -25,7 +26,7 @@ struct Args {
     title: String,
     #[arg(short, long)]
     method: String,
-    #[arg(short = 'g', long)]
+    #[arg(short = 'G', long)]
     headers: Option<String>,
     #[arg(short, long)]
     data: Option<String>,
@@ -44,12 +45,22 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let number_of_threads = std::cmp::max(1, args.tasks as usize);
+
     let runtime = Builder::new_multi_thread()
         .worker_threads(number_of_threads)
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime");
 
+    if let Ok((soft, _)) = getrlimit(Resource::NOFILE) {
+        if soft < args.concurent_requests as u64 {
+            setrlimit(
+                Resource::NOFILE,
+                soft + (args.concurent_requests as u64) * utils::constants::MULTIPLIER,
+                soft + (args.concurent_requests as u64) * utils::constants::MULTIPLIER,
+            )?;
+        }
+    }
     runtime.block_on(async_main(args))
 }
 
@@ -63,6 +74,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         run_time,
         rate_limit,
         title,
+        headers,
         ..
     } = args;
     let sem = Arc::new(Semaphore::new(concurent_requests as usize));
@@ -70,28 +82,19 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let request_per_second_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
     let request_per_second_counter = Arc::new(Mutex::new(0.0));
     let req_byte_size_arr_mutex: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
-    
+
     let start_time = SystemTime::now();
-    
+
     let request_counter_mutex = Arc::new(Mutex::new(0));
     let errors_mutex = Arc::new(Mutex::new(0));
     let non2xx_mutex = Arc::new(Mutex::new(0));
-    
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
         //.pool_max_idle_per_host(concurent_requests as usize)
         .tcp_nodelay(true)
         .build()?;
 
-    if let Ok((soft, _)) = getrlimit(Resource::NOFILE) {
-        if soft < concurent_requests as u64 {
-            setrlimit(
-                Resource::NOFILE,
-                soft + (concurent_requests as u64) * utils::constants::MULTIPLIER,
-                soft + (concurent_requests as u64) * utils::constants::MULTIPLIER,
-            )?;
-        }
-    }
     tokio::time::sleep(Duration::from_secs(2)).await;
     let deadline = Instant::now() + Duration::from_secs(run_time as u64);
     let mut set = JoinSet::new();
@@ -132,6 +135,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         let sleep = sleep.clone();
         let req_byte_size_arr_mutex = req_byte_size_arr_mutex.clone();
         let sem = sem.clone();
+        let headers = headers.clone();
         let latency_mutex = latency_mutex.clone();
         let request_per_second_counter = request_per_second_counter.clone();
         let request_counter = request_counter_mutex.clone();
@@ -156,10 +160,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             }
             {
                 let mut counter = request_per_second_counter.lock().await;
-                *counter += 1.0; // ✅ Increment request counter
+                *counter += 1.0;
             }
             let start = Instant::now();
-            let res = request(&client, &url, &method, data).await;
+            let res = request(&client, &url, &method, data, headers).await;
             let elapsed = start.elapsed().as_secs_f64();
             drop(_permit);
             {
@@ -179,7 +183,6 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                         let mut non2xx = non2xx.lock().await;
                         *non2xx += 1;
                     }
-      
                 }
                 Err(e) => {
                     let mut errors = errors.lock().await;
@@ -208,12 +211,13 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let req_byte_size_vec = req_byte_size.clone();
     let req_byte_size_histogram = logging::PerformanceStats::from_data(req_byte_size_vec);
     // dbg!(req_byte_size_histogram);
-    
+    //
+    let req = request_counter_mutex.lock().await.clone();
     let results = logging::Results::new(
         title,
         url,
         history_histogram,
-        concurent_requests,
+        req,
         latency_histogram,
         req_byte_size_histogram,
         run_time,
@@ -233,10 +237,12 @@ async fn request(
     url: &str,
     method: &str,
     data: Option<String>,
+    headers: Option<String>,
 ) -> Result<Response, reqwest::Error> {
+    let header = parse_from_json_string_headers(headers);
     let resp = match method {
         "GET" => {
-            let res = client.get(url).send().await?;
+            let res = client.get(url).headers(header).send().await?;
             res
         }
         "POST" => {
@@ -244,11 +250,32 @@ async fn request(
             if let Some(data) = data {
                 builder = builder.body(data);
             }
-            let res = builder.send().await?;
+            let res = builder.headers(header).send().await?;
             res
         }
         _ => panic!("Invalid HTTP method"),
     };
-
     Ok(resp)
+}
+
+fn parse_from_json_string_headers(headers: Option<String>) -> HeaderMap {
+    if headers.is_none() {
+        return HeaderMap::new();
+    }
+    let headers_json = serde_json::from_str(headers.unwrap().as_str());
+    let mut header_map = HeaderMap::new();
+
+    if let Some(Value::Object(map)) = headers_json.ok() {
+        for (key, value) in map {
+            if let Value::String(val) = value {
+                if let (Ok(name), Ok(header_val)) = (
+                    HeaderName::from_bytes(key.as_bytes()),
+                    HeaderValue::from_str(&val),
+                ) {
+                    header_map.insert(name, header_val);
+                }
+            }
+        }
+    }
+    header_map
 }

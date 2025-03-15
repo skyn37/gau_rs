@@ -196,17 +196,17 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     }
     let latency = latency_mutex.lock().await;
     let latency_vec = latency.clone();
-    let latency_histogram = logging::Histogram::from_data(latency_vec);
+    let latency_histogram = logging::PerformanceStats::from_data(latency_vec);
     // dbg!(latency_histogram);
 
     let history = request_per_second_mutex.lock().await;
     let history_vec = history.clone();
-    let history_histogram = logging::Histogram::from_data(history_vec);
+    let history_histogram = logging::PerformanceStats::from_data(history_vec);
     // dbg!(history_histogram);
 
     let req_byte_size = req_byte_size_arr_mutex.lock().await;
     let req_byte_size_vec = req_byte_size.clone();
-    let req_byte_size_histogram = logging::Histogram::from_data(req_byte_size_vec);
+    let req_byte_size_histogram = logging::PerformanceStats::from_data(req_byte_size_vec);
     // dbg!(req_byte_size_histogram);
     
     let results = logging::Results::new(

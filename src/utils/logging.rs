@@ -6,10 +6,10 @@ pub struct Results {
     title: String,                           // Title of the run TODO.
     url: String,                             // URL that was targeted.
     //socket_path: Option<String>, // UNIX Domain Socket or Windows Named Pipe that was targeted. TODO
-    requests_per_second: Histogram, // Number of requests that were sent per second.
+    requests_per_second: PerformanceStats, // Number of requests that were sent per second.
     requests: u32,               // Number of requests that were sent.
-    latency: Histogram,          // Response latency.
-    throughput: Histogram,       // Response data throughput per second.(response bytes per second)
+    latency: PerformanceStats,          // Response latency.
+    throughput: PerformanceStats,       // Response data throughput per second.(response bytes per second)
     duration: u32,               // Amount of time the test took, in seconds.
     errors: u32,                 // Number of connection errors (including timeouts) that occurred.
     timeouts: u32,               // Number of connection timeouts that occurred.
@@ -27,10 +27,10 @@ impl Results {
     pub fn new(
         title: String,
         url: String,
-        requests_per_second: Histogram,
+        requests_per_second: PerformanceStats,
         requests: u32,
-        latency: Histogram,
-        throughput: Histogram,
+        latency: PerformanceStats,
+        throughput: PerformanceStats,
         duration: u32,
         errors: u32,
         timeouts: u32,
@@ -58,7 +58,7 @@ impl Results {
 }
 
 #[derive(Debug)]
-pub struct Histogram {
+pub struct PerformanceStats {
     min: f64,     // The lowest value for this statistic.
     max: f64,     // The highest value for this statistic.
     average: f64, // The average (mean) value.
@@ -74,7 +74,7 @@ pub struct Histogram {
     p99_999: f64, // The 99.999th percentile value for this statistic.
 }
 
-impl Histogram {
+impl PerformanceStats {
     pub fn from_data(mut data: Vec<f64>) -> Self {
         if data.is_empty() {
             panic!("Dataset cannot be empty");
@@ -103,7 +103,7 @@ impl Histogram {
         let p99_99 = Self::compute_percentile(&data, 99.99);
         let p99_999 = Self::compute_percentile(&data, 99.999);
 
-        Histogram {
+        PerformanceStats {
             min: data[0],
             max: data[n - 1],
             average: mean,

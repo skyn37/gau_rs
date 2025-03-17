@@ -8,20 +8,13 @@
 - Configurable number of concurrent requests
 - Configurable tasks
 
+-- **USAGE**:
+
 ```rust
 gau_rs [OPTIONS] --url <URL> --method <METHOD>
 ```
-```rust
-Options:
-  -u, --url <URL>
-  -m, --method <METHOD>
-  -d, --data <DATA>
-  -n, --number-of-requests <NUMBER_OF_REQUESTS>  [default: 1]
-  -c, --concurent-requests <CONCURENT_REQUESTS>  [default: 1]
-  -t, --tasks <TASKS>                            [default: 1]
-  -h, --help                                     Print help
-  -V, --version                                  Print version
-  ```
+
+-- **What works**:
 
 | Status | Feature |
 | --- | -------------------------- |
@@ -31,7 +24,6 @@ Options:
 0%  |  Scripted multi-server launch |
 50%  |  Headers, cookies, | 
 0%  |  UNIX domain socket support |
-0%  |  Pipelining |
 
 
 
